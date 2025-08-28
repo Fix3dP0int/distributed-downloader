@@ -10,16 +10,21 @@ from loguru import logger
 
 from .models import DownloadTask, TaskStatus, JobStatus
 from .redis_client import RedisClient
+from .config import HuggingFaceConfig
 
 
 class MasterNode:
     """Master node responsible for task creation and coordination."""
     
-    def __init__(self, redis_client: RedisClient):
+    def __init__(self, redis_client: RedisClient, hf_config: HuggingFaceConfig):
         """Initialize master node."""
         self.redis_client = redis_client
-        self.hf_api = HfApi()
-        self.hf_fs = HfFileSystem()
+        self.hf_config = hf_config
+        
+        # Initialize HF API with token if provided
+        token = hf_config.token
+        self.hf_api = HfApi(token=token)
+        self.hf_fs = HfFileSystem(token=token)
         
     def create_download_job(self, dataset_name: str, local_path: Optional[str] = None) -> Optional[str]:
         """Create a new download job for a Hugging Face dataset."""

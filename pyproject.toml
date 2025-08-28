@@ -9,7 +9,9 @@ dependencies = [
     "redis>=5.0.0",
     "click>=8.0.0",
     "pydantic>=2.0.0",
-    "loguru>=0.7.0"
+    "loguru>=0.7.0",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
 ]
 
 [project.scripts]

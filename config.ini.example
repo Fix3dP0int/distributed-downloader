@@ -1,0 +1,18 @@
+# Distributed Downloader Configuration
+# Lines starting with # are comments
+# Remove the # to uncomment settings
+
+[redis]
+host = localhost
+port = 6379
+# password = your_redis_password
+# username = your_redis_username
+db = 0
+
+[huggingface]
+# token = your_huggingface_token
+# cache_dir = /path/to/cache/dir
+
+[app]
+log_level = INFO
+# output_dir = /path/to/downloads

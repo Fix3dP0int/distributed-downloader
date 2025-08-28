@@ -7,34 +7,48 @@ from pathlib import Path
 import click
 from loguru import logger
 
+from .config import get_config_manager, ConfigManager
 from .redis_client import RedisClient
 from .master import MasterNode
 from .worker import WorkerNode
 
 
 @click.group()
-@click.option('--redis-host', default='localhost', help='Redis server host')
-@click.option('--redis-port', default=6379, help='Redis server port')
+@click.option('--config', '-c', help='Configuration file path')
+@click.option('--redis-host', default=None, help='Redis server host')
+@click.option('--redis-port', default=None, help='Redis server port')
 @click.option('--redis-password', default=None, help='Redis server password')
-@click.option('--log-level', default='INFO', help='Log level (DEBUG, INFO, WARNING, ERROR)')
+@click.option('--redis-username', default=None, help='Redis server username (Redis 6.0+ ACL)')
+@click.option('--log-level', default=None, help='Log level (DEBUG, INFO, WARNING, ERROR)')
 @click.pass_context
-def main(ctx, redis_host, redis_port, redis_password, log_level):
+def main(ctx, config, redis_host, redis_port, redis_password, redis_username, log_level):
     """Distributed Hugging Face Downloader."""
+    # Initialize configuration manager
+    config_manager = get_config_manager(config)
+    
+    # Update config with CLI args
+    config_manager.update_from_cli_args(
+        redis_host=redis_host,
+        redis_port=redis_port,
+        redis_password=redis_password,
+        redis_username=redis_username,
+        log_level=log_level
+    )
+    
+    app_config = config_manager.get_config()
+    
     # Configure logging
     logger.remove()
     logger.add(
         sys.stderr,
-        level=log_level.upper(),
+        level=app_config.log_level.upper(),
         format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
     )
     
-    # Store Redis config in context
+    # Store config in context
     ctx.ensure_object(dict)
-    ctx.obj['redis_config'] = {
-        'host': redis_host,
-        'port': redis_port,
-        'password': redis_password
-    }
+    ctx.obj['config'] = app_config
+    ctx.obj['config_manager'] = config_manager
 
 
 @main.command()
@@ -43,18 +57,28 @@ def main(ctx, redis_host, redis_port, redis_password, log_level):
 @click.pass_context
 def master(ctx, dataset_name, output_dir):
     """Start master node to create download jobs."""
-    redis_config = ctx.obj['redis_config']
-    redis_client = RedisClient(**redis_config)
+    app_config = ctx.obj['config']
+    
+    # Use output_dir from CLI or config
+    final_output_dir = output_dir or app_config.output_dir
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
     
     # Test Redis connection
     if not redis_client.ping():
         logger.error("Cannot connect to Redis server")
         sys.exit(1)
     
-    master_node = MasterNode(redis_client)
+    master_node = MasterNode(redis_client, app_config.huggingface)
     
     logger.info(f"Creating download job for dataset: {dataset_name}")
-    job_id = master_node.create_download_job(dataset_name, output_dir)
+    job_id = master_node.create_download_job(dataset_name, final_output_dir)
     
     if job_id:
         logger.info(f"Successfully created job {job_id}")
@@ -71,15 +95,22 @@ def master(ctx, dataset_name, output_dir):
 @click.pass_context
 def worker(ctx, worker_id):
     """Start worker node to process download tasks."""
-    redis_config = ctx.obj['redis_config']
-    redis_client = RedisClient(**redis_config)
+    app_config = ctx.obj['config']
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
     
     # Test Redis connection
     if not redis_client.ping():
         logger.error("Cannot connect to Redis server")
         sys.exit(1)
     
-    worker_node = WorkerNode(redis_client, worker_id)
+    worker_node = WorkerNode(redis_client, app_config.huggingface, worker_id)
     
     try:
         worker_node.start()
@@ -99,15 +130,22 @@ def status(ctx, job_id, watch, interval):
     import time
     from datetime import datetime
     
-    redis_config = ctx.obj['redis_config']
-    redis_client = RedisClient(**redis_config)
+    app_config = ctx.obj['config']
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
     
     # Test Redis connection
     if not redis_client.ping():
         logger.error("Cannot connect to Redis server")
         sys.exit(1)
     
-    master_node = MasterNode(redis_client)
+    master_node = MasterNode(redis_client, app_config.huggingface)
     
     def show_status():
         click.clear()
@@ -162,8 +200,15 @@ def status(ctx, job_id, watch, interval):
 @click.pass_context
 def workers(ctx):
     """List active workers."""
-    redis_config = ctx.obj['redis_config']
-    redis_client = RedisClient(**redis_config)
+    app_config = ctx.obj['config']
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
     
     # Test Redis connection
     if not redis_client.ping():
@@ -184,8 +229,15 @@ def workers(ctx):
 @click.pass_context
 def queue(ctx):
     """Show queue statistics."""
-    redis_config = ctx.obj['redis_config']
-    redis_client = RedisClient(**redis_config)
+    app_config = ctx.obj['config']
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
     
     # Test Redis connection
     if not redis_client.ping():
@@ -200,6 +252,16 @@ def queue(ctx):
     click.echo(f"  Pending tasks: {pending}")
     click.echo(f"  Failed tasks: {failed}")
     click.echo(f"  Active workers: {active_workers}")
+
+
+@main.command()
+@click.option('--output', '-o', default='config.ini', help='Output file path')
+def init_config(output):
+    """Create a sample configuration file."""
+    config_manager = ConfigManager()
+    config_manager.create_sample_config(output)
+    click.echo(f"Created sample configuration file: {output}")
+    click.echo("Edit the file and uncomment the settings you want to use.")
 
 
 if __name__ == '__main__':

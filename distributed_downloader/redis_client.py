@@ -2,6 +2,7 @@
 
 import json
 import redis
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 from loguru import logger
 
@@ -11,15 +12,28 @@ from .models import DownloadTask, TaskStatus, WorkerStatus, JobStatus
 class RedisClient:
     """Redis client for managing download tasks and worker coordination."""
     
-    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0, password: Optional[str] = None):
+    def __init__(self, host: str = "localhost", port: int = 6379, db: int = 0, 
+                 password: Optional[str] = None, username: Optional[str] = None):
         """Initialize Redis client."""
-        self.redis_client = redis.Redis(
-            host=host,
-            port=port,
-            db=db,
-            password=password,
-            decode_responses=True
-        )
+        # For Redis 6.0+ ACL support, use username if provided
+        if username and password:
+            self.redis_client = redis.Redis(
+                host=host,
+                port=port,
+                db=db,
+                username=username,
+                password=password,
+                decode_responses=True
+            )
+        else:
+            # Traditional password-only authentication
+            self.redis_client = redis.Redis(
+                host=host,
+                port=port,
+                db=db,
+                password=password,
+                decode_responses=True
+            )
         
         # Queue names
         self.task_queue = "downloader:tasks"
@@ -68,7 +82,7 @@ class RedisClient:
             key = f"downloader:task:{task_id}"
             updates = {
                 "status": status.value,
-                "updated_at": json.dumps({"timestamp": "now"}),
+                "updated_at": datetime.utcnow().isoformat(),
             }
             if worker_id:
                 updates["worker_id"] = worker_id
@@ -104,7 +118,28 @@ class RedisClient:
         """Register a worker."""
         try:
             key = f"{self.workers_key}:{worker_status.worker_id}"
-            self.redis_client.hmset(key, worker_status.model_dump())
+            # Convert model to dict and serialize fields for Redis
+            worker_data = worker_status.model_dump()
+            
+            # Create a new dict with properly serialized values
+            redis_data = {}
+            
+            for field, value in worker_data.items():
+                if value is None:
+                    # Skip None values or convert to empty string
+                    redis_data[field] = ""
+                elif isinstance(value, datetime):
+                    redis_data[field] = value.isoformat()
+                elif isinstance(value, bool):
+                    redis_data[field] = str(value).lower()
+                elif isinstance(value, dict):
+                    redis_data[field] = json.dumps(value)
+                elif isinstance(value, (int, float)):
+                    redis_data[field] = str(value)
+                else:
+                    redis_data[field] = str(value)
+            
+            self.redis_client.hmset(key, redis_data)
             self.redis_client.expire(key, 300)  # 5 minute expiry
             logger.info(f"Registered worker {worker_status.worker_id}")
             return True
@@ -116,7 +151,7 @@ class RedisClient:
         """Update worker heartbeat."""
         try:
             key = f"{self.workers_key}:{worker_id}"
-            updates = {"last_heartbeat": json.dumps({"timestamp": "now"})}
+            updates = {"last_heartbeat": datetime.utcnow().isoformat()}
             if current_task:
                 updates["current_task"] = current_task
             
@@ -137,11 +172,28 @@ class RedisClient:
             logger.error(f"Failed to get active workers: {e}")
             return []
     
+    def unregister_worker(self, worker_id: str) -> bool:
+        """Unregister a worker (remove from Redis)."""
+        try:
+            key = f"{self.workers_key}:{worker_id}"
+            result = self.redis_client.delete(key)
+            if result:
+                logger.info(f"Unregistered worker {worker_id}")
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Failed to unregister worker {worker_id}: {e}")
+            return False
+    
     def create_job(self, job_status: JobStatus) -> bool:
         """Create a new download job."""
         try:
             key = f"{self.jobs_key}:{job_status.job_id}"
-            self.redis_client.hmset(key, job_status.model_dump())
+            # Convert model to dict and serialize datetime fields
+            job_data = job_status.model_dump()
+            job_data['created_at'] = job_data['created_at'].isoformat() if isinstance(job_data['created_at'], datetime) else job_data['created_at']
+            job_data['updated_at'] = job_data['updated_at'].isoformat() if isinstance(job_data['updated_at'], datetime) else job_data['updated_at']
+            
+            self.redis_client.hmset(key, job_data)
             logger.info(f"Created job {job_status.job_id}")
             return True
         except Exception as e:
@@ -158,7 +210,7 @@ class RedisClient:
             if failed_increment > 0:
                 self.redis_client.hincrby(key, "failed_files", failed_increment)
             
-            self.redis_client.hset(key, "updated_at", json.dumps({"timestamp": "now"}))
+            self.redis_client.hset(key, "updated_at", datetime.utcnow().isoformat())
             return True
         except Exception as e:
             logger.error(f"Failed to update job {job_id} progress: {e}")
@@ -170,6 +222,22 @@ class RedisClient:
             key = f"{self.jobs_key}:{job_id}"
             job_data = self.redis_client.hgetall(key)
             if job_data:
+                # Convert string datetime fields back to datetime objects
+                if 'created_at' in job_data and isinstance(job_data['created_at'], str):
+                    job_data['created_at'] = datetime.fromisoformat(job_data['created_at'])
+                if 'updated_at' in job_data and isinstance(job_data['updated_at'], str):
+                    job_data['updated_at'] = datetime.fromisoformat(job_data['updated_at'])
+                    
+                # Convert string numbers back to int
+                if 'total_files' in job_data:
+                    job_data['total_files'] = int(job_data['total_files'])
+                if 'completed_files' in job_data:
+                    job_data['completed_files'] = int(job_data['completed_files'])
+                if 'failed_files' in job_data:
+                    job_data['failed_files'] = int(job_data['failed_files'])
+                if 'active_workers' in job_data:
+                    job_data['active_workers'] = int(job_data['active_workers'])
+                    
                 return JobStatus.model_validate(job_data)
             return None
         except Exception as e:

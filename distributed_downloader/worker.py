@@ -15,14 +15,16 @@ from loguru import logger
 
 from .models import DownloadTask, TaskStatus, WorkerStatus
 from .redis_client import RedisClient
+from .config import HuggingFaceConfig
 
 
 class WorkerNode:
     """Worker node responsible for downloading files."""
     
-    def __init__(self, redis_client: RedisClient, worker_id: Optional[str] = None):
+    def __init__(self, redis_client: RedisClient, hf_config: HuggingFaceConfig, worker_id: Optional[str] = None):
         """Initialize worker node."""
         self.redis_client = redis_client
+        self.hf_config = hf_config
         self.worker_id = worker_id or str(uuid.uuid4())
         self.is_running = False
         self.current_task: Optional[DownloadTask] = None
@@ -57,6 +59,10 @@ class WorkerNode:
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self.heartbeat_thread.start()
         
+        # Set up more aggressive signal handling
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
         # Main work loop
         self._work_loop()
     
@@ -70,11 +76,34 @@ class WorkerNode:
             logger.info("Waiting for current task to complete...")
             # Give it a moment to finish naturally
             time.sleep(2)
+        
+        # Unregister worker from Redis
+        self.redis_client.unregister_worker(self.worker_id)
+        logger.info(f"Worker {self.worker_id} has been unregistered")
     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
-        logger.info(f"Received signal {signum}, initiating graceful shutdown")
-        self.stop()
+        logger.info(f"Received signal {signum}, initiating immediate shutdown")
+        self.is_running = False
+        # If we have a current task, mark it as interrupted
+        if self.current_task:
+            logger.info(f"Interrupting current task {self.current_task.task_id}")
+            self.redis_client.update_task_status(
+                self.current_task.task_id, 
+                TaskStatus.FAILED, 
+                worker_id=self.worker_id,
+                error_message="Worker shutdown - task interrupted"
+            )
+            # Requeue the task for retry
+            self.redis_client.requeue_failed_task(self.current_task)
+        
+        # Clean up worker registration immediately
+        self.redis_client.unregister_worker(self.worker_id)
+        logger.info(f"Worker {self.worker_id} shutdown complete")
+        
+        # Force exit after cleanup
+        import sys
+        sys.exit(0)
     
     def _heartbeat_loop(self):
         """Send periodic heartbeats to Redis."""
@@ -197,22 +226,60 @@ class WorkerNode:
     def _download_with_hf_hub(self, task: DownloadTask) -> bool:
         """Download file using huggingface_hub."""
         try:
+            # Check if worker is still running before starting
+            if not self.is_running:
+                return False
+                
             # Extract dataset info from metadata
             original_path = task.metadata.get("original_path", "")
             if not original_path:
                 return False
             
-            # Use hf_hub_download
+            # Use hf_hub_download with smaller timeout to make it more interruptible
             local_path = Path(task.file_path)
             cache_dir = local_path.parent
             
-            downloaded_path = hf_hub_download(
-                repo_id=task.dataset_name,
-                filename=original_path,
-                repo_type="dataset",
-                cache_dir=str(cache_dir),
-                local_files_only=False
-            )
+            # Since hf_hub_download doesn't support cancellation well,
+            # we run it in a thread and check for interruption
+            import threading
+            import queue
+            result_queue = queue.Queue()
+            exception_queue = queue.Queue()
+            
+            def download_thread():
+                try:
+                    downloaded_path = hf_hub_download(
+                        repo_id=task.dataset_name,
+                        filename=original_path,
+                        repo_type="dataset",
+                        cache_dir=str(cache_dir),
+                        local_files_only=False,
+                        token=self.hf_config.token
+                    )
+                    result_queue.put(downloaded_path)
+                except Exception as e:
+                    exception_queue.put(e)
+            
+            download_thread = threading.Thread(target=download_thread)
+            download_thread.daemon = True
+            download_thread.start()
+            
+            # Poll for completion or interruption
+            while download_thread.is_alive():
+                if not self.is_running:
+                    logger.info(f"HF Hub download interrupted for {task.file_path}")
+                    return False
+                time.sleep(0.1)  # Check every 100ms
+            
+            # Check for exceptions
+            if not exception_queue.empty():
+                raise exception_queue.get()
+                
+            # Get the result
+            if result_queue.empty():
+                return False
+                
+            downloaded_path = result_queue.get()
             
             # Move to final location if needed
             if downloaded_path != str(local_path):
@@ -238,7 +305,11 @@ class WorkerNode:
             with open(local_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if not self.is_running:
-                        # Worker is shutting down
+                        # Worker is shutting down - clean up partial download
+                        f.close()
+                        if local_path.exists():
+                            local_path.unlink()  # Delete partial file
+                        logger.info(f"Download cancelled for {task.file_path}")
                         return False
                     f.write(chunk)
             
