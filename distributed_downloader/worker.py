@@ -16,6 +16,7 @@ from loguru import logger
 from .models import DownloadTask, TaskStatus, WorkerStatus
 from .redis_client import RedisClient
 from .config import HuggingFaceConfig
+from .ssl_config import configure_ssl_bypass, configure_requests_ssl_bypass
 
 
 class WorkerNode:
@@ -26,6 +27,12 @@ class WorkerNode:
         self.redis_client = redis_client
         self.hf_config = hf_config
         self.worker_id = worker_id or str(uuid.uuid4())
+        
+        # Configure SSL bypass if requested
+        if hf_config.disable_ssl_verify:
+            configure_ssl_bypass()
+            configure_requests_ssl_bypass()
+            logger.info("SSL verification disabled for downloads")
         self.is_running = False
         self.current_task: Optional[DownloadTask] = None
         self.tasks_completed = 0
@@ -296,7 +303,9 @@ class WorkerNode:
     def _download_with_requests(self, task: DownloadTask) -> bool:
         """Download file using direct HTTP requests."""
         try:
-            response = requests.get(task.file_url, stream=True, timeout=300)
+            # Use verify=False if SSL bypass is configured
+            verify_ssl = not self.hf_config.disable_ssl_verify
+            response = requests.get(task.file_url, stream=True, timeout=300, verify=verify_ssl)
             response.raise_for_status()
             
             local_path = Path(task.file_path)

@@ -11,6 +11,7 @@ from loguru import logger
 from .models import DownloadTask, TaskStatus, JobStatus
 from .redis_client import RedisClient
 from .config import HuggingFaceConfig
+from .ssl_config import configure_ssl_bypass
 
 
 class MasterNode:
@@ -20,6 +21,11 @@ class MasterNode:
         """Initialize master node."""
         self.redis_client = redis_client
         self.hf_config = hf_config
+        
+        # Configure SSL bypass if requested
+        if hf_config.disable_ssl_verify:
+            configure_ssl_bypass()
+            logger.info("SSL verification disabled for Hugging Face API")
         
         # Initialize HF API with token if provided
         token = hf_config.token

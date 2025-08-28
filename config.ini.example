@@ -12,6 +12,7 @@ db = 0
 [huggingface]
 # token = your_huggingface_token
 # cache_dir = /path/to/cache/dir
+# disable_ssl_verify = false
 
 [app]
 log_level = INFO

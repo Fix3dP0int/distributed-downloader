@@ -24,6 +24,7 @@ class HuggingFaceConfig:
     """Hugging Face configuration settings."""
     token: Optional[str] = None
     cache_dir: Optional[str] = None
+    disable_ssl_verify: bool = False
 
 
 @dataclass
@@ -90,6 +91,7 @@ class ConfigManager:
                     hf_section = parser["huggingface"]
                     hf_config.token = hf_section.get("token", hf_config.token)
                     hf_config.cache_dir = hf_section.get("cache_dir", hf_config.cache_dir)
+                    hf_config.disable_ssl_verify = hf_section.getboolean("disable_ssl_verify", hf_config.disable_ssl_verify)
                 
                 # App configuration
                 if "app" in parser:
@@ -115,6 +117,7 @@ class ConfigManager:
             hf_config.token = hf_token
         
         hf_config.cache_dir = os.getenv("HF_CACHE_DIR", hf_config.cache_dir)
+        hf_config.disable_ssl_verify = os.getenv("HF_DISABLE_SSL_VERIFY", str(hf_config.disable_ssl_verify)).lower() in ('true', '1', 'yes', 'on')
         
         # App settings from environment
         log_level = os.getenv("LOG_LEVEL", log_level)
@@ -140,6 +143,8 @@ class ConfigManager:
                     setattr(self.config.redis, redis_attr, value)
                 elif key in ["hf_token", "huggingface_token"]:
                     self.config.huggingface.token = value
+                elif key == "disable_ssl_verify":
+                    self.config.huggingface.disable_ssl_verify = value
                 elif key == "log_level":
                     self.config.log_level = value
                 elif key == "output_dir":
@@ -161,7 +166,8 @@ class ConfigManager:
         # Hugging Face section
         config["huggingface"] = {
             "token": "# your_huggingface_token",
-            "cache_dir": "# /path/to/cache/dir (optional)"
+            "cache_dir": "# /path/to/cache/dir (optional)",
+            "disable_ssl_verify": "# false (set to true to disable SSL verification)"
         }
         
         # App section
