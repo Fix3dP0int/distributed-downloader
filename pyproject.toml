@@ -1,0 +1,16 @@
+[project]
+name = "distributed-downloader"
+version = "0.1.0"
+description = "Distributed Hugging Face dataset downloader using Redis message queue"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "huggingface-hub>=0.20.0",
+    "redis>=5.0.0",
+    "click>=8.0.0",
+    "pydantic>=2.0.0",
+    "loguru>=0.7.0"
+]
+
+[project.scripts]
+hf-downloader = "distributed_downloader.cli:main"
