@@ -278,9 +278,10 @@ class WorkerNode:
             if not original_path:
                 return False
             
-            # Use hf_hub_download with smaller timeout to make it more interruptible
+            # Use hf_hub_download - it downloads to its own cache, we'll copy to our target
             local_path = Path(task.file_path)
-            cache_dir = local_path.parent
+            # Let hf_hub_download use its default cache, don't specify cache_dir
+            # We'll copy the file to our desired location afterwards
             
             # Since hf_hub_download doesn't support cancellation well,
             # we run it in a thread and check for interruption
@@ -295,7 +296,6 @@ class WorkerNode:
                         repo_id=task.dataset_name,
                         filename=original_path,
                         repo_type="dataset",
-                        cache_dir=str(cache_dir),
                         local_files_only=False,
                         token=self.hf_config.token
                     )
@@ -324,10 +324,23 @@ class WorkerNode:
                 
             downloaded_path = result_queue.get()
             
-            # Move to final location if needed
+            # Ensure target directory exists
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Copy from HF cache to our target location
             if downloaded_path != str(local_path):
-                import shutil
-                shutil.move(downloaded_path, str(local_path))
+                try:
+                    import shutil
+                    shutil.copy2(downloaded_path, str(local_path))
+                    logger.debug(f"Copied from HF cache: {downloaded_path} -> {local_path}")
+                except Exception as e:
+                    logger.error(f"Failed to copy from HF cache to target location: {e}")
+                    return False
+            
+            # Verify the file exists at target location
+            if not local_path.exists():
+                logger.error(f"File not found at target location after HF download: {local_path}")
+                return False
             
             logger.info(f"Downloaded with hf_hub: {task.file_path}")
             return True

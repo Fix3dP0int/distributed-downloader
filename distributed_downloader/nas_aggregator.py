@@ -59,7 +59,8 @@ class NASAggregator:
         try:
             local_path = Path(local_file_path)
             if not local_path.exists():
-                logger.error(f"Local file does not exist: {local_path}")
+                logger.error(f"Local file does not exist for NAS copy: {local_path}")
+                logger.error(f"This usually means the download didn't complete properly or file was moved/deleted")
                 return False
             
             # Determine NAS destination path
