@@ -25,6 +25,7 @@ class HuggingFaceConfig:
     token: Optional[str] = None
     cache_dir: Optional[str] = None
     disable_ssl_verify: bool = False
+    enable_hf_transfer: bool = False
 
 
 @dataclass
@@ -104,6 +105,7 @@ class ConfigManager:
                     hf_config.token = hf_section.get("token", hf_config.token)
                     hf_config.cache_dir = hf_section.get("cache_dir", hf_config.cache_dir)
                     hf_config.disable_ssl_verify = hf_section.getboolean("disable_ssl_verify", hf_config.disable_ssl_verify)
+                    hf_config.enable_hf_transfer = hf_section.getboolean("enable_hf_transfer", hf_config.enable_hf_transfer)
                 
                 # NAS configuration
                 if "nas" in parser:
@@ -139,6 +141,7 @@ class ConfigManager:
         
         hf_config.cache_dir = os.getenv("HF_CACHE_DIR", hf_config.cache_dir)
         hf_config.disable_ssl_verify = os.getenv("HF_DISABLE_SSL_VERIFY", str(hf_config.disable_ssl_verify)).lower() in ('true', '1', 'yes', 'on')
+        hf_config.enable_hf_transfer = os.getenv("HF_HUB_ENABLE_HF_TRANSFER", str(hf_config.enable_hf_transfer)).lower() in ('true', '1', 'yes', 'on')
         
         # NAS settings from environment
         nas_config.enabled = os.getenv("NAS_ENABLED", str(nas_config.enabled)).lower() in ('true', '1', 'yes', 'on')
@@ -200,7 +203,8 @@ class ConfigManager:
         config["huggingface"] = {
             "token": "# your_huggingface_token",
             "cache_dir": "# /path/to/cache/dir (optional)",
-            "disable_ssl_verify": "# false (set to true to disable SSL verification)"
+            "disable_ssl_verify": "# false (set to true to disable SSL verification)",
+            "enable_hf_transfer": "# false (set to true for faster downloads with hf_transfer)"
         }
         
         # NAS section

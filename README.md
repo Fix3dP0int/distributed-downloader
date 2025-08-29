@@ -85,11 +85,14 @@ cd distributed_downloader
 # Install dependencies with UV
 uv sync
 
-# Or
+# Or with native TLS support
 uv --native-tls sync
 
 # Or install in development mode
 uv pip install -e .
+
+# For high-speed downloads (optional but recommended)
+uv sync --extra hf_transfer
 ```
 
 ### Redis Setup
@@ -150,6 +153,7 @@ db = 0
 token = your_huggingface_token
 cache_dir = /path/to/cache/dir
 disable_ssl_verify = false
+enable_hf_transfer = true
 
 [nas]
 enabled = true
@@ -173,6 +177,7 @@ export REDIS_USERNAME=myuser
 # Hugging Face settings  
 export HF_TOKEN=your_token_here
 export HF_DISABLE_SSL_VERIFY=true
+export HF_HUB_ENABLE_HF_TRANSFER=1
 
 # NAS settings
 export NAS_ENABLED=true
@@ -283,6 +288,30 @@ This disables SSL certificate verification for:
 - Direct HTTP file downloads
 - Suppresses urllib3 SSL warnings
 
+### High-Speed Downloads with hf_transfer
+
+For high-bandwidth environments, enable `hf_transfer` for significantly faster downloads:
+
+```ini
+[huggingface]
+enable_hf_transfer = true
+```
+
+Or via environment variable:
+```bash
+export HF_HUB_ENABLE_HF_TRANSFER=1
+```
+
+**Benefits:**
+- **Rust-based library** for maximum performance
+- **Multi-threaded transfers** with optimal bandwidth utilization  
+- **Automatic fallback** to standard downloads if unavailable
+- **No configuration changes** required - works transparently
+
+**Requirements:**
+- High-bandwidth network connection (>100 Mbps recommended)
+- The `hf_transfer` library is automatically installed with `huggingface-hub[hf_transfer]`
+
 ### Redis Authentication
 
 Supports both traditional and modern Redis authentication:
@@ -351,6 +380,7 @@ password = secure_password
 [huggingface]
 token = hf_your_token_here
 disable_ssl_verify = true
+enable_hf_transfer = true
 
 [nas]
 enabled = true
@@ -369,17 +399,21 @@ hf-downloader --config config.ini worker
 ```bash
 # Configure for maximum throughput with centralized storage
 cat > config.ini << EOF
+[huggingface]
+enable_hf_transfer = true
+
 [nas]
 enabled = true
 path = /high-speed-nas/datasets
 copy_after_download = true
 preserve_structure = true
+delete_after_copy = true
 
 [app]
 output_dir = /local-ssd/temp-downloads
 EOF
 
-# Workers download to local SSD, then copy to NAS asynchronously
+# Workers download to local SSD with hf_transfer, then move to NAS
 hf-downloader --config config.ini worker
 ```
 
@@ -416,16 +450,6 @@ distributed_downloader/
 ├── ssl_config.py        # SSL bypass configuration
 ├── nas_aggregator.py    # NAS file aggregation
 └── cli.py              # Command-line interface
-```
-
-### Running Tests
-
-```bash
-# Install test dependencies
-uv add pytest pytest-asyncio
-
-# Run tests
-uv run pytest
 ```
 
 ## Troubleshooting
@@ -499,4 +523,4 @@ pkill -9 -f "hf-downloader"
 
 ## License
 
-[License information here]
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

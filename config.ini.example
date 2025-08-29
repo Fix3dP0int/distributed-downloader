@@ -13,6 +13,7 @@ db = 0
 # token = your_huggingface_token
 # cache_dir = /path/to/cache/dir
 # disable_ssl_verify = false
+# enable_hf_transfer = false
 
 [nas]
 # enabled = false

@@ -37,6 +37,12 @@ class WorkerNode:
             configure_ssl_bypass()
             configure_requests_ssl_bypass()
             logger.info("SSL verification disabled for downloads")
+        
+        # Configure hf_transfer for faster downloads if requested
+        if self.hf_config.enable_hf_transfer:
+            self._setup_hf_transfer()
+            logger.info("hf_transfer enabled for faster downloads")
+        
         self.is_running = False
         self.current_task: Optional[DownloadTask] = None
         self.tasks_completed = 0
@@ -385,3 +391,21 @@ class WorkerNode:
             logger.error(f"HTTP download failed for {task.task_id}: {e}")
             task._error_message = str(e)
             return False
+    
+    def _setup_hf_transfer(self):
+        """Configure hf_transfer for faster downloads."""
+        try:
+            import os
+            # Set the environment variable to enable hf_transfer
+            os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+            
+            # Try to import hf_transfer to verify it's available
+            try:
+                import hf_transfer
+                logger.info(f"hf_transfer version {hf_transfer.__version__} available")
+            except ImportError:
+                logger.warning("hf_transfer not installed. Install with: pip install huggingface-hub[hf_transfer]")
+                logger.warning("Falling back to standard downloads")
+                
+        except Exception as e:
+            logger.error(f"Failed to setup hf_transfer: {e}")
