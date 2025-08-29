@@ -43,6 +43,11 @@ class WorkerNode:
             self._setup_hf_transfer()
             logger.info("hf_transfer enabled for faster downloads")
         
+        # Configure custom endpoint if provided
+        if self.hf_config.endpoint:
+            self._setup_hf_endpoint(self.hf_config.endpoint)
+            logger.info(f"Using custom Hugging Face endpoint: {self.hf_config.endpoint}")
+        
         self.is_running = False
         self.current_task: Optional[DownloadTask] = None
         self.tasks_completed = 0
@@ -303,7 +308,8 @@ class WorkerNode:
                         filename=original_path,
                         repo_type="dataset",
                         local_files_only=False,
-                        token=self.hf_config.token
+                        token=self.hf_config.token,
+                        endpoint=self.hf_config.endpoint
                     )
                     result_queue.put(downloaded_path)
                 except Exception as e:
@@ -409,3 +415,13 @@ class WorkerNode:
                 
         except Exception as e:
             logger.error(f"Failed to setup hf_transfer: {e}")
+    
+    def _setup_hf_endpoint(self, endpoint: str):
+        """Configure custom Hugging Face endpoint."""
+        try:
+            import os
+            # Set the environment variable for HF endpoint
+            os.environ["HF_ENDPOINT"] = endpoint
+            logger.info(f"Set HF_ENDPOINT environment variable to: {endpoint}")
+        except Exception as e:
+            logger.error(f"Failed to setup HF endpoint: {e}")

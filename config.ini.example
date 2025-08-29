@@ -14,6 +14,7 @@ db = 0
 # cache_dir = /path/to/cache/dir
 # disable_ssl_verify = false
 # enable_hf_transfer = false
+# endpoint = https://huggingface.co
 
 [nas]
 # enabled = false

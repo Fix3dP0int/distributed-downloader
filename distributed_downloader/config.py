@@ -26,6 +26,7 @@ class HuggingFaceConfig:
     cache_dir: Optional[str] = None
     disable_ssl_verify: bool = False
     enable_hf_transfer: bool = False
+    endpoint: Optional[str] = None
 
 
 @dataclass
@@ -106,6 +107,7 @@ class ConfigManager:
                     hf_config.cache_dir = hf_section.get("cache_dir", hf_config.cache_dir)
                     hf_config.disable_ssl_verify = hf_section.getboolean("disable_ssl_verify", hf_config.disable_ssl_verify)
                     hf_config.enable_hf_transfer = hf_section.getboolean("enable_hf_transfer", hf_config.enable_hf_transfer)
+                    hf_config.endpoint = hf_section.get("endpoint", hf_config.endpoint)
                 
                 # NAS configuration
                 if "nas" in parser:
@@ -142,6 +144,7 @@ class ConfigManager:
         hf_config.cache_dir = os.getenv("HF_CACHE_DIR", hf_config.cache_dir)
         hf_config.disable_ssl_verify = os.getenv("HF_DISABLE_SSL_VERIFY", str(hf_config.disable_ssl_verify)).lower() in ('true', '1', 'yes', 'on')
         hf_config.enable_hf_transfer = os.getenv("HF_HUB_ENABLE_HF_TRANSFER", str(hf_config.enable_hf_transfer)).lower() in ('true', '1', 'yes', 'on')
+        hf_config.endpoint = os.getenv("HF_ENDPOINT", hf_config.endpoint)
         
         # NAS settings from environment
         nas_config.enabled = os.getenv("NAS_ENABLED", str(nas_config.enabled)).lower() in ('true', '1', 'yes', 'on')
@@ -177,6 +180,8 @@ class ConfigManager:
                     self.config.huggingface.token = value
                 elif key == "disable_ssl_verify":
                     self.config.huggingface.disable_ssl_verify = value
+                elif key in ["hf_endpoint", "huggingface_endpoint"]:
+                    self.config.huggingface.endpoint = value
                 elif key in ["nas_enabled", "enable_nas"]:
                     self.config.nas.enabled = value
                 elif key in ["nas_path"]:
@@ -204,7 +209,8 @@ class ConfigManager:
             "token": "# your_huggingface_token",
             "cache_dir": "# /path/to/cache/dir (optional)",
             "disable_ssl_verify": "# false (set to true to disable SSL verification)",
-            "enable_hf_transfer": "# false (set to true for faster downloads with hf_transfer)"
+            "enable_hf_transfer": "# false (set to true for faster downloads with hf_transfer)",
+            "endpoint": "# https://huggingface.co (or mirror like http://hf-mirror.com)"
         }
         
         # NAS section

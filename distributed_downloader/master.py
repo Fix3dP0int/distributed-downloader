@@ -27,10 +27,16 @@ class MasterNode:
             configure_ssl_bypass()
             logger.info("SSL verification disabled for Hugging Face API")
         
-        # Initialize HF API with token if provided
+        # Configure custom endpoint if provided
+        if hf_config.endpoint:
+            self._setup_hf_endpoint(hf_config.endpoint)
+            logger.info(f"Using custom Hugging Face endpoint: {hf_config.endpoint}")
+        
+        # Initialize HF API with token and endpoint
         token = hf_config.token
-        self.hf_api = HfApi(token=token)
-        self.hf_fs = HfFileSystem(token=token)
+        endpoint = hf_config.endpoint
+        self.hf_api = HfApi(token=token, endpoint=endpoint)
+        self.hf_fs = HfFileSystem(token=token, endpoint=endpoint)
         
     def create_download_job(self, dataset_name: str, local_path: Optional[str] = None) -> Optional[str]:
         """Create a new download job for a Hugging Face dataset."""
@@ -140,8 +146,9 @@ class MasterNode:
         try:
             task_id = str(uuid.uuid4())
             
-            # Construct the download URL
-            file_url = f"https://huggingface.co/datasets/{dataset_name}/resolve/main/{file_info['path']}"
+            # Construct the download URL using configured endpoint
+            base_url = self.hf_config.endpoint if self.hf_config.endpoint else "https://huggingface.co"
+            file_url = f"{base_url}/datasets/{dataset_name}/resolve/main/{file_info['path']}"
             
             # Determine local file path
             if local_path:
@@ -184,3 +191,13 @@ class MasterNode:
             "failed_tasks": self.redis_client.get_failed_queue_size(),
             "active_workers": len(self.redis_client.get_active_workers())
         }
+    
+    def _setup_hf_endpoint(self, endpoint: str):
+        """Configure custom Hugging Face endpoint."""
+        try:
+            import os
+            # Set the environment variable for HF endpoint
+            os.environ["HF_ENDPOINT"] = endpoint
+            logger.info(f"Set HF_ENDPOINT environment variable to: {endpoint}")
+        except Exception as e:
+            logger.error(f"Failed to setup HF endpoint: {e}")

@@ -154,6 +154,7 @@ token = your_huggingface_token
 cache_dir = /path/to/cache/dir
 disable_ssl_verify = false
 enable_hf_transfer = true
+endpoint = http://hf-mirror.com
 
 [nas]
 enabled = true
@@ -178,6 +179,7 @@ export REDIS_USERNAME=myuser
 export HF_TOKEN=your_token_here
 export HF_DISABLE_SSL_VERIFY=true
 export HF_HUB_ENABLE_HF_TRANSFER=1
+export HF_ENDPOINT=http://hf-mirror.com
 
 # NAS settings
 export NAS_ENABLED=true
@@ -312,6 +314,31 @@ export HF_HUB_ENABLE_HF_TRANSFER=1
 - High-bandwidth network connection (>100 Mbps recommended)
 - The `hf_transfer` library is automatically installed with `huggingface-hub[hf_transfer]`
 
+### Mirror Sites and Custom Endpoints
+
+For users in regions with limited access to Hugging Face or those wanting to use mirror sites:
+
+```ini
+[huggingface]
+endpoint = http://hf-mirror.com
+```
+
+Or via environment variable:
+```bash
+export HF_ENDPOINT=http://hf-mirror.com
+```
+
+**Popular Mirror Sites:**
+- **China**: `http://hf-mirror.com`
+- **Custom Enterprise**: `https://your-company-hf-mirror.com`
+- **Default**: `https://huggingface.co` (if not specified)
+
+**Features:**
+- **Automatic URL rewriting**: All download URLs use the specified endpoint
+- **API compatibility**: Full compatibility with Hugging Face Hub API
+- **Transparent operation**: Works with both `hf_hub_download` and direct HTTP downloads
+- **SSL support**: Works with both HTTP and HTTPS endpoints
+
 ### Redis Authentication
 
 Supports both traditional and modern Redis authentication:
@@ -381,6 +408,7 @@ password = secure_password
 token = hf_your_token_here
 disable_ssl_verify = true
 enable_hf_transfer = true
+endpoint = http://hf-mirror.com
 
 [nas]
 enabled = true
@@ -394,6 +422,23 @@ hf-downloader --config config.ini master "dataset-name"
 hf-downloader --config config.ini worker
 ```
 
+### China Mirror Setup
+
+```bash
+# For users in China using hf-mirror.com
+cat > config.ini << EOF
+[huggingface]
+token = your_hf_token
+endpoint = http://hf-mirror.com
+enable_hf_transfer = true
+disable_ssl_verify = false
+EOF
+
+# Start downloading with mirror
+hf-downloader --config config.ini master "microsoft/DialoGPT-medium"
+hf-downloader --config config.ini worker
+```
+
 ### High-Performance Setup with NAS
 
 ```bash
@@ -401,6 +446,7 @@ hf-downloader --config config.ini worker
 cat > config.ini << EOF
 [huggingface]
 enable_hf_transfer = true
+endpoint = http://hf-mirror.com
 
 [nas]
 enabled = true
