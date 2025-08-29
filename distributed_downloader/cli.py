@@ -110,7 +110,7 @@ def worker(ctx, worker_id):
         logger.error("Cannot connect to Redis server")
         sys.exit(1)
     
-    worker_node = WorkerNode(redis_client, app_config.huggingface, worker_id)
+    worker_node = WorkerNode(redis_client, app_config, worker_id)
     
     try:
         worker_node.start()

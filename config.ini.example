@@ -14,6 +14,13 @@ db = 0
 # cache_dir = /path/to/cache/dir
 # disable_ssl_verify = false
 
+[nas]
+# enabled = false
+# path = /path/to/nas/storage
+# copy_after_download = true
+# preserve_structure = true
+# delete_after_copy = false
+
 [app]
 log_level = INFO
 # output_dir = /path/to/downloads

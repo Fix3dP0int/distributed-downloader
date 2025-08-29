@@ -28,10 +28,21 @@ class HuggingFaceConfig:
 
 
 @dataclass
+class NASConfig:
+    """NAS aggregation configuration settings."""
+    enabled: bool = False
+    path: Optional[str] = None
+    copy_after_download: bool = True
+    preserve_structure: bool = True
+    delete_after_copy: bool = False
+
+
+@dataclass
 class AppConfig:
     """Application configuration."""
     redis: RedisConfig
     huggingface: HuggingFaceConfig
+    nas: NASConfig
     log_level: str = "INFO"
     output_dir: Optional[str] = None
 
@@ -68,6 +79,7 @@ class ConfigManager:
         # Start with defaults
         redis_config = RedisConfig()
         hf_config = HuggingFaceConfig()
+        nas_config = NASConfig()
         log_level = "INFO"
         output_dir = None
         
@@ -92,6 +104,15 @@ class ConfigManager:
                     hf_config.token = hf_section.get("token", hf_config.token)
                     hf_config.cache_dir = hf_section.get("cache_dir", hf_config.cache_dir)
                     hf_config.disable_ssl_verify = hf_section.getboolean("disable_ssl_verify", hf_config.disable_ssl_verify)
+                
+                # NAS configuration
+                if "nas" in parser:
+                    nas_section = parser["nas"]
+                    nas_config.enabled = nas_section.getboolean("enabled", nas_config.enabled)
+                    nas_config.path = nas_section.get("path", nas_config.path)
+                    nas_config.copy_after_download = nas_section.getboolean("copy_after_download", nas_config.copy_after_download)
+                    nas_config.preserve_structure = nas_section.getboolean("preserve_structure", nas_config.preserve_structure)
+                    nas_config.delete_after_copy = nas_section.getboolean("delete_after_copy", nas_config.delete_after_copy)
                 
                 # App configuration
                 if "app" in parser:
@@ -119,6 +140,13 @@ class ConfigManager:
         hf_config.cache_dir = os.getenv("HF_CACHE_DIR", hf_config.cache_dir)
         hf_config.disable_ssl_verify = os.getenv("HF_DISABLE_SSL_VERIFY", str(hf_config.disable_ssl_verify)).lower() in ('true', '1', 'yes', 'on')
         
+        # NAS settings from environment
+        nas_config.enabled = os.getenv("NAS_ENABLED", str(nas_config.enabled)).lower() in ('true', '1', 'yes', 'on')
+        nas_config.path = os.getenv("NAS_PATH", nas_config.path)
+        nas_config.copy_after_download = os.getenv("NAS_COPY_AFTER_DOWNLOAD", str(nas_config.copy_after_download)).lower() in ('true', '1', 'yes', 'on')
+        nas_config.preserve_structure = os.getenv("NAS_PRESERVE_STRUCTURE", str(nas_config.preserve_structure)).lower() in ('true', '1', 'yes', 'on')
+        nas_config.delete_after_copy = os.getenv("NAS_DELETE_AFTER_COPY", str(nas_config.delete_after_copy)).lower() in ('true', '1', 'yes', 'on')
+        
         # App settings from environment
         log_level = os.getenv("LOG_LEVEL", log_level)
         output_dir = os.getenv("OUTPUT_DIR", output_dir)
@@ -126,6 +154,7 @@ class ConfigManager:
         return AppConfig(
             redis=redis_config,
             huggingface=hf_config,
+            nas=nas_config,
             log_level=log_level,
             output_dir=output_dir
         )
@@ -145,6 +174,10 @@ class ConfigManager:
                     self.config.huggingface.token = value
                 elif key == "disable_ssl_verify":
                     self.config.huggingface.disable_ssl_verify = value
+                elif key in ["nas_enabled", "enable_nas"]:
+                    self.config.nas.enabled = value
+                elif key in ["nas_path"]:
+                    self.config.nas.path = value
                 elif key == "log_level":
                     self.config.log_level = value
                 elif key == "output_dir":
@@ -168,6 +201,15 @@ class ConfigManager:
             "token": "# your_huggingface_token",
             "cache_dir": "# /path/to/cache/dir (optional)",
             "disable_ssl_verify": "# false (set to true to disable SSL verification)"
+        }
+        
+        # NAS section
+        config["nas"] = {
+            "enabled": "# false (set to true to enable NAS aggregation)",
+            "path": "# /path/to/nas/storage",
+            "copy_after_download": "# true (copy files to NAS after download)",
+            "preserve_structure": "# true (preserve directory structure in NAS)",
+            "delete_after_copy": "# false (delete original files after successful NAS copy)"
         }
         
         # App section

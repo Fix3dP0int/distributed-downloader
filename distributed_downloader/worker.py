@@ -15,21 +15,25 @@ from loguru import logger
 
 from .models import DownloadTask, TaskStatus, WorkerStatus
 from .redis_client import RedisClient
-from .config import HuggingFaceConfig
+from .config import HuggingFaceConfig, AppConfig
 from .ssl_config import configure_ssl_bypass, configure_requests_ssl_bypass
+from .nas_aggregator import NASAggregator
 
 
 class WorkerNode:
     """Worker node responsible for downloading files."""
     
-    def __init__(self, redis_client: RedisClient, hf_config: HuggingFaceConfig, worker_id: Optional[str] = None):
+    def __init__(self, redis_client: RedisClient, app_config: AppConfig, worker_id: Optional[str] = None):
         """Initialize worker node."""
         self.redis_client = redis_client
-        self.hf_config = hf_config
+        self.hf_config = app_config.huggingface
         self.worker_id = worker_id or str(uuid.uuid4())
         
+        # Initialize NAS aggregator
+        self.nas_aggregator = NASAggregator(app_config.nas)
+        
         # Configure SSL bypass if requested
-        if hf_config.disable_ssl_verify:
+        if self.hf_config.disable_ssl_verify:
             configure_ssl_bypass()
             configure_requests_ssl_bypass()
             logger.info("SSL verification disabled for downloads")
@@ -149,6 +153,32 @@ class WorkerNode:
                 success = self._process_task(task)
                 
                 if success:
+                    # Copy to NAS if enabled (and optionally delete original)
+                    nas_success = True
+                    if self.nas_aggregator.enabled and self.nas_aggregator.config.copy_after_download:
+                        original_path = task.metadata.get("original_path", "")
+                        if original_path:
+                            if self.nas_aggregator.config.delete_after_copy:
+                                # Use synchronous copy when deleting to ensure proper cleanup
+                                nas_success = self.nas_aggregator.copy_to_nas(
+                                    task.file_path,
+                                    task.dataset_name,
+                                    original_path
+                                )
+                                if nas_success:
+                                    logger.info(f"File copied to NAS and original deleted: {task.file_path}")
+                                else:
+                                    logger.warning(f"Failed to copy to NAS (original file preserved): {task.file_path}")
+                            else:
+                                # Use asynchronous copy when keeping original
+                                nas_success = self.nas_aggregator.copy_to_nas_async(
+                                    task.file_path,
+                                    task.dataset_name,
+                                    original_path
+                                )
+                                if not nas_success:
+                                    logger.warning(f"Failed to start NAS copy: {task.file_path}")
+                    
                     self.redis_client.update_task_status(
                         task.task_id, 
                         TaskStatus.COMPLETED, 
@@ -163,7 +193,13 @@ class WorkerNode:
                             completed_increment=1
                         )
                     
-                    logger.info(f"Completed task {task.task_id}")
+                    nas_message = ""
+                    if self.nas_aggregator.enabled:
+                        if self.nas_aggregator.config.delete_after_copy:
+                            nas_message = " (copied to NAS, original deleted)" if nas_success else " (NAS copy failed, original preserved)"
+                        else:
+                            nas_message = " (NAS copy initiated)"
+                    logger.info(f"Completed task {task.task_id}{nas_message}")
                 else:
                     # Task failed, mark as failed and potentially requeue
                     self.redis_client.update_task_status(
