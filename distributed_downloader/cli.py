@@ -91,6 +91,75 @@ def master(ctx, dataset_name, output_dir):
 
 
 @main.command()
+@click.argument('datasets')
+@click.option('--output-dir', '-o', help='Output directory for downloads')
+@click.option('--from-file', '-f', is_flag=True, help='Read dataset names from file (one per line)')
+@click.pass_context
+def batch_master(ctx, datasets, output_dir, from_file):
+    """Create multiple download jobs in parallel."""
+    app_config = ctx.obj['config']
+    
+    # Parse dataset names
+    if from_file:
+        try:
+            with open(datasets, 'r') as f:
+                dataset_names = [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            logger.error(f"Failed to read datasets file {datasets}: {e}")
+            sys.exit(1)
+    else:
+        # Parse comma-separated list
+        dataset_names = [name.strip() for name in datasets.split(',') if name.strip()]
+    
+    if not dataset_names:
+        logger.error("No datasets provided")
+        sys.exit(1)
+    
+    # Use output_dir from CLI or config
+    final_output_dir = output_dir or app_config.output_dir
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
+    
+    # Test Redis connection
+    if not redis_client.ping():
+        logger.error("Cannot connect to Redis server")
+        sys.exit(1)
+    
+    master_node = MasterNode(redis_client, app_config.huggingface)
+    
+    logger.info(f"Creating batch download jobs for {len(dataset_names)} datasets")
+    job_ids = master_node.create_batch_download_jobs(dataset_names, final_output_dir)
+    
+    # Report results
+    successful_jobs = [(job_id, dataset_names[i]) for i, job_id in enumerate(job_ids) if job_id is not None]
+    failed_datasets = [dataset_names[i] for i, job_id in enumerate(job_ids) if job_id is None]
+    
+    if successful_jobs:
+        logger.info(f"Successfully created {len(successful_jobs)} jobs:")
+        for job_id, dataset_name in successful_jobs:
+            print(f"  {dataset_name}: {job_id}")
+        
+        logger.info("Use 'hf-downloader repos' to list all repositories")
+        logger.info("Use 'hf-downloader status <repo-name>' to monitor progress")
+        logger.info("Start workers with 'hf-downloader worker' on each machine")
+    
+    if failed_datasets:
+        logger.error(f"Failed to create jobs for {len(failed_datasets)} datasets:")
+        for dataset_name in failed_datasets:
+            print(f"  {dataset_name}")
+    
+    if not successful_jobs:
+        logger.error("No jobs were created successfully")
+        sys.exit(1)
+
+
+@main.command()
 @click.option('--worker-id', help='Worker ID (auto-generated if not provided)')
 @click.pass_context
 def worker(ctx, worker_id):
@@ -121,12 +190,15 @@ def worker(ctx, worker_id):
 
 
 @main.command()
-@click.argument('job_id', required=False)
+@click.argument('identifier', required=False)
 @click.option('--watch', '-w', is_flag=True, help='Watch status updates')
 @click.option('--interval', default=5, help='Watch interval in seconds')
 @click.pass_context
-def status(ctx, job_id, watch, interval):
-    """Show status of jobs, workers, and queues."""
+def status(ctx, identifier, watch, interval):
+    """Show status of jobs, workers, and queues.
+    
+    IDENTIFIER can be either a job ID or repository name.
+    """
     import time
     from datetime import datetime
     
@@ -160,11 +232,20 @@ def status(ctx, job_id, watch, interval):
         click.echo(f"  Active workers: {queue_stats['active_workers']}")
         click.echo()
         
-        # Job status if specified
-        if job_id:
-            job_status = master_node.get_job_status(job_id)
+        # Job/repo status if specified
+        if identifier:
+            # First try as job ID
+            job_status = master_node.get_job_status(identifier)
+            
+            # If not found, try as repository name
+            if not job_status:
+                job_id = redis_client.get_job_by_repo(identifier)
+                if job_id:
+                    job_status = master_node.get_job_status(job_id)
+            
             if job_status:
-                click.echo(f"Job {job_id} ({job_status.dataset_name}):")
+                click.echo(f"Repository: {job_status.dataset_name}")
+                click.echo(f"  Job ID: {job_status.job_id}")
                 click.echo(f"  Status: {job_status.status}")
                 click.echo(f"  Progress: {job_status.completed_files}/{job_status.total_files} files")
                 if job_status.failed_files > 0:
@@ -173,7 +254,7 @@ def status(ctx, job_id, watch, interval):
                 progress_pct = (job_status.completed_files / job_status.total_files) * 100 if job_status.total_files > 0 else 0
                 click.echo(f"  Progress: {progress_pct:.1f}%")
             else:
-                click.echo(f"Job {job_id} not found")
+                click.echo(f"Repository or job '{identifier}' not found")
             click.echo()
         
         # Active workers
@@ -194,6 +275,54 @@ def status(ctx, job_id, watch, interval):
             pass
     else:
         show_status()
+
+
+@main.command()
+@click.pass_context
+def repos(ctx):
+    """List all repositories and their status."""
+    app_config = ctx.obj['config']
+    
+    redis_client = RedisClient(
+        host=app_config.redis.host,
+        port=app_config.redis.port,
+        password=app_config.redis.password,
+        username=app_config.redis.username,
+        db=app_config.redis.db
+    )
+    
+    # Test Redis connection
+    if not redis_client.ping():
+        logger.error("Cannot connect to Redis server")
+        sys.exit(1)
+    
+    repositories = redis_client.list_repositories()
+    
+    if repositories:
+        click.echo(f"Repositories ({len(repositories)}):")
+        click.echo("=" * 60)
+        
+        for repo_name in sorted(repositories):
+            repo_status = redis_client.get_repo_status(repo_name)
+            if repo_status:
+                status = repo_status.get('status', 'UNKNOWN')
+                total_files = int(repo_status.get('total_files', 0))
+                completed_files = int(repo_status.get('completed_files', 0))
+                failed_files = int(repo_status.get('failed_files', 0))
+                
+                progress_pct = (completed_files / total_files) * 100 if total_files > 0 else 0
+                
+                click.echo(f"  {repo_name}")
+                click.echo(f"    Status: {status}")
+                click.echo(f"    Progress: {completed_files}/{total_files} files ({progress_pct:.1f}%)")
+                if failed_files > 0:
+                    click.echo(f"    Failed: {failed_files} files")
+                click.echo()
+            else:
+                click.echo(f"  {repo_name} - Status unknown")
+                click.echo()
+    else:
+        click.echo("No repositories found")
 
 
 @main.command()

@@ -201,3 +201,44 @@ class MasterNode:
             logger.info(f"Set HF_ENDPOINT environment variable to: {endpoint}")
         except Exception as e:
             logger.error(f"Failed to setup HF endpoint: {e}")
+    
+    def create_batch_download_jobs(self, dataset_names: List[str], local_path: Optional[str] = None) -> List[Optional[str]]:
+        """Create multiple download jobs in parallel."""
+        import concurrent.futures
+        import threading
+        
+        logger.info(f"Creating batch download jobs for {len(dataset_names)} datasets")
+        job_ids = []
+        
+        def create_single_job(dataset_name: str) -> Optional[str]:
+            """Create a single download job."""
+            try:
+                return self.create_download_job(dataset_name, local_path)
+            except Exception as e:
+                logger.error(f"Failed to create job for {dataset_name}: {e}")
+                return None
+        
+        # Create jobs in parallel using ThreadPoolExecutor
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(dataset_names), 10)) as executor:
+            future_to_dataset = {
+                executor.submit(create_single_job, dataset_name): dataset_name 
+                for dataset_name in dataset_names
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_dataset):
+                dataset_name = future_to_dataset[future]
+                try:
+                    job_id = future.result()
+                    job_ids.append(job_id)
+                    if job_id:
+                        logger.info(f"Created job {job_id} for dataset {dataset_name}")
+                    else:
+                        logger.error(f"Failed to create job for dataset {dataset_name}")
+                except Exception as e:
+                    logger.error(f"Job creation failed for {dataset_name}: {e}")
+                    job_ids.append(None)
+        
+        successful_jobs = [job_id for job_id in job_ids if job_id is not None]
+        logger.info(f"Batch job creation completed: {len(successful_jobs)}/{len(dataset_names)} jobs created successfully")
+        
+        return job_ids

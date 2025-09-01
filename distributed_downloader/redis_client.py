@@ -40,6 +40,8 @@ class RedisClient:
         self.failed_queue = "downloader:failed_tasks"
         self.workers_key = "downloader:workers"
         self.jobs_key = "downloader:jobs"
+        self.repos_key = "downloader:repos"
+        self.repo_list_key = "downloader:repo_list"
         
     def ping(self) -> bool:
         """Check Redis connection."""
@@ -97,18 +99,21 @@ class RedisClient:
             return False
     
     def requeue_failed_task(self, task: DownloadTask) -> bool:
-        """Requeue a failed task for retry."""
+        """Requeue a failed task for retry with mandatory 3-retry system."""
         try:
             task.attempt_count += 1
             task.status = TaskStatus.RETRYING
+            task.updated_at = datetime.utcnow()
             
             if task.attempt_count <= task.max_retries:
+                logger.info(f"Requeuing task {task.task_id} for retry {task.attempt_count}/{task.max_retries}")
                 return self.enqueue_task(task)
             else:
-                # Move to failed queue
+                # Exceeded max retries - permanently failed
+                task.status = TaskStatus.FAILED
                 task_data = task.model_dump_json()
                 self.redis_client.lpush(self.failed_queue, task_data)
-                logger.warning(f"Task {task.task_id} exceeded max retries, moved to failed queue")
+                logger.error(f"Task {task.task_id} permanently failed after {task.max_retries} retries")
                 return False
         except Exception as e:
             logger.error(f"Failed to requeue task {task.task_id}: {e}")
@@ -194,6 +199,11 @@ class RedisClient:
             job_data['updated_at'] = job_data['updated_at'].isoformat() if isinstance(job_data['updated_at'], datetime) else job_data['updated_at']
             
             self.redis_client.hmset(key, job_data)
+            
+            # Create repository indexing if dataset_name exists
+            if hasattr(job_status, 'dataset_name') and job_status.dataset_name:
+                self._index_repository(job_status.dataset_name, job_status.job_id, job_data)
+            
             logger.info(f"Created job {job_status.job_id}")
             return True
         except Exception as e:
@@ -259,3 +269,93 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Failed to get failed queue size: {e}")
             return -1
+    
+    def _normalize_repo_name(self, repo_name: str) -> str:
+        """Convert repo name to Redis-safe format (replace '/' with '__')."""
+        return repo_name.replace('/', '__')
+    
+    def _denormalize_repo_name(self, normalized_name: str) -> str:
+        """Convert Redis key back to original repo name."""
+        return normalized_name.replace('__', '/')
+    
+    def _index_repository(self, repo_name: str, job_id: str, job_data: dict) -> bool:
+        """Create repository index for easy lookup."""
+        try:
+            normalized_name = self._normalize_repo_name(repo_name)
+            repo_key = f"{self.repos_key}:{normalized_name}"
+            
+            # Store repository metadata
+            repo_data = {
+                "repo_name": repo_name,
+                "job_id": job_id,
+                "status": job_data.get('status', 'PENDING'),
+                "total_files": job_data.get('total_files', 0),
+                "created_at": job_data.get('created_at'),
+                "updated_at": job_data.get('updated_at')
+            }
+            
+            self.redis_client.hmset(repo_key, repo_data)
+            # Add to repository list
+            self.redis_client.sadd(self.repo_list_key, repo_name)
+            
+            logger.debug(f"Indexed repository: {repo_name} -> {job_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to index repository {repo_name}: {e}")
+            return False
+    
+    def get_job_by_repo(self, repo_name: str) -> Optional[str]:
+        """Get job ID by repository name."""
+        try:
+            normalized_name = self._normalize_repo_name(repo_name)
+            repo_key = f"{self.repos_key}:{normalized_name}"
+            job_id = self.redis_client.hget(repo_key, "job_id")
+            return job_id
+        except Exception as e:
+            logger.error(f"Failed to get job for repo {repo_name}: {e}")
+            return None
+    
+    def list_repositories(self) -> List[str]:
+        """Get list of all repositories."""
+        try:
+            repos = self.redis_client.smembers(self.repo_list_key)
+            return list(repos) if repos else []
+        except Exception as e:
+            logger.error(f"Failed to list repositories: {e}")
+            return []
+    
+    def get_repo_status(self, repo_name: str) -> Optional[dict]:
+        """Get repository status information."""
+        try:
+            normalized_name = self._normalize_repo_name(repo_name)
+            repo_key = f"{self.repos_key}:{normalized_name}"
+            repo_data = self.redis_client.hgetall(repo_key)
+            
+            if repo_data:
+                # Get the actual job status and sync it
+                job_id = repo_data.get('job_id')
+                if job_id:
+                    job_status = self.get_job_status(job_id)
+                    if job_status:
+                        # Update the repository data with current job status
+                        updated_repo_data = {
+                            'completed_files': job_status.completed_files,
+                            'failed_files': job_status.failed_files,
+                            'total_files': job_status.total_files,
+                            'status': job_status.status.value if hasattr(job_status.status, 'value') else str(job_status.status),
+                            'updated_at': datetime.utcnow().isoformat()
+                        }
+                        
+                        # Update the repository record in Redis with latest data
+                        self.redis_client.hmset(repo_key, updated_repo_data)
+                        
+                        # Merge with existing repo data
+                        repo_data.update(updated_repo_data)
+                        
+                        logger.debug(f"Synced repo status for {repo_name}: {job_status.completed_files}/{job_status.total_files} files")
+                
+                return repo_data
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get repo status for {repo_name}: {e}")
+            return None

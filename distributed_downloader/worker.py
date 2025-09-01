@@ -212,26 +212,31 @@ class WorkerNode:
                             nas_message = " (NAS copy initiated)"
                     logger.info(f"Completed task {task.task_id}{nas_message}")
                 else:
-                    # Task failed, mark as failed and potentially requeue
+                    # Task failed, mark as failed and handle retry logic
+                    error_message = getattr(task, '_error_message', 'Unknown error')
+                    
                     self.redis_client.update_task_status(
                         task.task_id, 
                         TaskStatus.FAILED, 
                         worker_id=self.worker_id,
-                        error_message=getattr(task, '_error_message', 'Unknown error')
+                        error_message=error_message
                     )
                     
-                    # Try to requeue for retry
+                    # Try to requeue for retry (mandatory 3-retry system)
                     requeued = self.redis_client.requeue_failed_task(task)
-                    if not requeued:
+                    if requeued:
+                        logger.warning(f"Task {task.task_id} failed, requeued for retry {task.attempt_count + 1}/{task.max_retries}: {error_message}")
+                    else:
+                        # Permanently failed after max retries
                         self.tasks_failed += 1
+                        logger.error(f"Task {task.task_id} permanently failed after {task.max_retries} attempts: {error_message}")
+                        
                         # Update job progress for permanent failure
                         if "job_id" in task.metadata:
                             self.redis_client.update_job_progress(
                                 task.metadata["job_id"], 
                                 failed_increment=1
                             )
-                    
-                    logger.warning(f"Failed task {task.task_id}")
                 
                 self.current_task = None
                 
@@ -256,12 +261,14 @@ class WorkerNode:
             local_path = Path(task.file_path)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # Check if file already exists and has correct size
-            if local_path.exists() and task.file_size:
-                existing_size = local_path.stat().st_size
-                if existing_size == task.file_size:
-                    logger.info(f"File already exists with correct size: {task.file_path}")
+            # Check if file already exists and verify its integrity
+            if local_path.exists():
+                if self._verify_file_integrity(local_path, task.file_size):
+                    logger.info(f"File already exists and verified: {task.file_path}")
                     return True
+                else:
+                    logger.warning(f"Existing file failed integrity check, re-downloading: {task.file_path}")
+                    local_path.unlink()  # Remove corrupted file
             
             # Attempt to download using huggingface_hub first
             success = self._download_with_hf_hub(task)
@@ -269,6 +276,16 @@ class WorkerNode:
             if not success:
                 # Fallback to direct HTTP download
                 success = self._download_with_requests(task)
+            
+            # Always verify file integrity after successful download
+            if success:
+                if not self._verify_file_integrity(local_path, task.file_size):
+                    logger.error(f"Downloaded file failed integrity check: {task.file_path}")
+                    if local_path.exists():
+                        local_path.unlink()  # Remove corrupted download
+                    task._error_message = "File integrity verification failed"
+                    return False
+                logger.debug(f"File integrity verified: {task.file_path}")
             
             return success
             
@@ -383,12 +400,6 @@ class WorkerNode:
                         return False
                     f.write(chunk)
             
-            # Verify file size if available
-            if task.file_size:
-                actual_size = local_path.stat().st_size
-                if actual_size != task.file_size:
-                    logger.warning(f"Size mismatch for {task.file_path}: expected {task.file_size}, got {actual_size}")
-                    # Continue anyway as some repos may have updated files
             
             logger.info(f"Downloaded with requests: {task.file_path}")
             return True
@@ -425,3 +436,57 @@ class WorkerNode:
             logger.info(f"Set HF_ENDPOINT environment variable to: {endpoint}")
         except Exception as e:
             logger.error(f"Failed to setup HF endpoint: {e}")
+    
+    def _verify_file_integrity(self, file_path: Path, expected_size: Optional[int] = None) -> bool:
+        """Verify file integrity by checking size and basic read test."""
+        try:
+            if not file_path.exists():
+                logger.debug(f"File does not exist: {file_path}")
+                return False
+            
+            # Check if file is empty
+            actual_size = file_path.stat().st_size
+            if actual_size == 0:
+                logger.debug(f"File is empty: {file_path}")
+                return False
+            
+            # Check file size if expected size is provided
+            if expected_size is not None and actual_size != expected_size:
+                logger.warning(f"File size mismatch for {file_path}: expected {expected_size}, got {actual_size}")
+                # For now, we'll be lenient with size mismatches as HF repos may update files
+                # But we still want to log the discrepancy
+            
+            # Basic read test - try to read first few bytes to ensure file is not corrupted
+            try:
+                with open(file_path, 'rb') as f:
+                    # Try to read first 1KB to ensure file is readable
+                    chunk = f.read(1024)
+                    if not chunk and actual_size > 0:
+                        logger.debug(f"File appears corrupted (cannot read content): {file_path}")
+                        return False
+            except (OSError, IOError) as e:
+                logger.debug(f"File read test failed for {file_path}: {e}")
+                return False
+            
+            # Check for common signs of corrupted downloads (HTML error pages, etc.)
+            if actual_size < 1024:  # Only check small files that might be error pages
+                try:
+                    with open(file_path, 'rb') as f:
+                        content = f.read().lower()
+                        # Check for HTML error pages or other common error indicators
+                        if b'<html' in content or b'<!doctype' in content:
+                            logger.debug(f"File appears to be an HTML error page: {file_path}")
+                            return False
+                        if b'access denied' in content or b'403 forbidden' in content:
+                            logger.debug(f"File appears to be an access denied error: {file_path}")
+                            return False
+                except (OSError, IOError, UnicodeDecodeError):
+                    # If we can't read/decode the file, but it has the right size, assume it's ok
+                    pass
+            
+            logger.debug(f"File integrity check passed: {file_path} ({actual_size} bytes)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error during file integrity check for {file_path}: {e}")
+            return False
