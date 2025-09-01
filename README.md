@@ -12,11 +12,14 @@ In theory, if the number of machines matches the number of files, the total down
 
 - **Distributed Architecture**: Scale downloads across multiple machines
 - **Redis Message Queue**: Reliable task distribution and coordination
+- **Repository Management**: Hierarchical task organization (repository → job → tasks)
+- **Batch Job Creation**: Create multiple download jobs in parallel for different repositories
+- **File Integrity Verification**: Mandatory verification with automatic re-download of corrupted files
+- **3-Retry System**: Automatic retry with proper failure handling for all failed downloads
 - **Configuration Management**: Flexible config files, environment variables, and CLI options
 - **NAS Aggregation**: Automatically copy files to centralized NAS storage
 - **SSL Bypass**: Optional SSL certificate verification bypass for corporate environments
-- **Automatic Retry**: Failed downloads are automatically retried with configurable limits
-- **Progress Monitoring**: Real-time status updates and progress tracking
+- **Progress Monitoring**: Real-time status updates and progress tracking by repository
 - **Graceful Shutdown**: Workers handle interruptions gracefully and can be stopped immediately
 - **Fault Tolerance**: System continues working even if individual workers fail
 - **Dual Download Methods**: Uses both Hugging Face Hub API and direct HTTP downloads
@@ -199,7 +202,7 @@ The system provides a CLI tool `hf-downloader` with the following commands:
 #### Start a Download Job (Master)
 
 ```bash
-# Create a download job for a dataset
+# Create a download job for a single dataset
 hf-downloader master "microsoft/DialoGPT-medium"
 
 # Using configuration file
@@ -210,6 +213,21 @@ hf-downloader master "microsoft/DialoGPT-medium" --output-dir ./my-downloads
 
 # With Redis authentication
 hf-downloader --redis-password mypass --redis-username myuser master "dataset-name"
+```
+
+#### Batch Job Creation (Multiple Repositories)
+
+```bash
+# Create multiple download jobs in parallel
+hf-downloader batch-master "microsoft/DialoGPT-medium,nvidia/Llama-Nemotron-VLM-Dataset-v1,openai/whisper-large-v3"
+
+# From a file (one repository per line)
+echo "microsoft/DialoGPT-medium" > datasets.txt
+echo "nvidia/Llama-Nemotron-VLM-Dataset-v1" >> datasets.txt
+hf-downloader batch-master datasets.txt --from-file
+
+# With custom output directory
+hf-downloader batch-master "repo1,repo2,repo3" --output-dir ./batch-downloads
 ```
 
 #### Start Worker Nodes
@@ -231,14 +249,20 @@ hf-downloader --redis-host 192.168.1.100 --redis-password mypass worker
 #### Monitor Progress
 
 ```bash
-# Show overall status
+# Show overall system status
 hf-downloader status
 
-# Monitor specific job
+# Monitor specific job by job ID
 hf-downloader status <job-id>
 
+# Monitor repository by name
+hf-downloader status "microsoft/DialoGPT-medium"
+
 # Watch status with live updates
-hf-downloader status <job-id> --watch
+hf-downloader status "nvidia/Llama-Nemotron-VLM-Dataset-v1" --watch
+
+# List all repositories and their progress
+hf-downloader repos
 
 # Check queue statistics
 hf-downloader queue
@@ -371,10 +395,13 @@ password = your_password
    redis-server
    ```
 
-3. **Create a download job**
+3. **Create download jobs**
    ```bash
+   # Single repository
    hf-downloader master "microsoft/DialoGPT-medium" -o ./downloads
-   # Returns: Job ID: abc123...
+   
+   # Multiple repositories in parallel
+   hf-downloader batch-master "microsoft/DialoGPT-medium,nvidia/Llama-Nemotron-VLM-Dataset-v1,openai/whisper-large-v3"
    ```
 
 4. **Start workers on multiple machines**
@@ -391,7 +418,14 @@ password = your_password
 
 5. **Monitor progress**
    ```bash
-   hf-downloader status abc123 --watch
+   # List all repositories
+   hf-downloader repos
+   
+   # Monitor specific repository
+   hf-downloader status "microsoft/DialoGPT-medium" --watch
+   
+   # Check overall system status
+   hf-downloader status
    ```
 
 ### Corporate Environment Setup
@@ -415,8 +449,8 @@ enabled = true
 path = /corporate/nas/ml-datasets
 EOF
 
-# 2. Start master
-hf-downloader --config config.ini master "dataset-name"
+# 2. Start batch jobs for multiple datasets
+hf-downloader --config config.ini batch-master "dataset1,dataset2,dataset3"
 
 # 3. Start workers across the corporate network
 hf-downloader --config config.ini worker
@@ -435,7 +469,7 @@ disable_ssl_verify = false
 EOF
 
 # Start downloading with mirror
-hf-downloader --config config.ini master "microsoft/DialoGPT-medium"
+hf-downloader --config config.ini batch-master "microsoft/DialoGPT-medium,nvidia/Llama-Nemotron-VLM-Dataset-v1"
 hf-downloader --config config.ini worker
 ```
 
@@ -463,11 +497,30 @@ EOF
 hf-downloader --config config.ini worker
 ```
 
-## Error Handling and Retry Logic
+## Repository Management & File Integrity
 
-- **Automatic Retry**: Failed tasks are automatically retried up to 3 times
-- **Exponential Backoff**: Retry delays increase with each attempt
-- **Permanent Failure**: Tasks exceeding retry limits are moved to failed queue
+### Repository-Based Organization
+
+The system now uses a hierarchical approach for better organization:
+
+- **Repository Level**: Each HuggingFace repository gets its own job
+- **Job Level**: Contains all tasks for downloading a specific repository
+- **Task Level**: Individual file download tasks within a job
+
+### File Integrity Verification
+
+**Mandatory Verification System:**
+- **Size Verification**: Files must match expected size exactly
+- **Corruption Detection**: Identifies HTML error pages, empty files, and unreadable content
+- **Automatic Re-download**: Corrupted or incomplete files are automatically deleted and re-downloaded
+- **Read Test**: Ensures downloaded files are actually readable
+
+### 3-Retry System
+
+- **Mandatory Retries**: All failed downloads are automatically retried up to 3 times
+- **Comprehensive Failure Handling**: Covers network errors, corruption, size mismatches, and timeouts
+- **Smart Retry Logic**: Each retry attempt gets a fresh download attempt
+- **Permanent Failure Tracking**: Tasks that fail all 3 retries are marked as permanently failed
 - **Worker Recovery**: Workers automatically reconnect and resume after network issues
 - **Immediate Shutdown**: Ctrl+C stops workers immediately, cleaning up partial downloads
 - **Task Requeuing**: Interrupted tasks are requeued for other workers
