@@ -452,9 +452,8 @@ class WorkerNode:
             
             # Check file size if expected size is provided
             if expected_size is not None and actual_size != expected_size:
-                logger.warning(f"File size mismatch for {file_path}: expected {expected_size}, got {actual_size}")
-                # For now, we'll be lenient with size mismatches as HF repos may update files
-                # But we still want to log the discrepancy
+                logger.error(f"File size mismatch for {file_path}: expected {expected_size}, got {actual_size}")
+                return False  # Size mismatch means file is corrupted/incomplete
             
             # Basic read test - try to read first few bytes to ensure file is not corrupted
             try:
